@@ -1,17 +1,17 @@
-# tictactoe
+# Merge 2048 — Artisanal Bakery 🍪
 
-A new Flutter project.
+Slide chunky wooden number biscuits around a flour-dusted walnut baking tray
+and merge matching pairs to bake ever-larger biscuits. Reach the legendary
+**2048 biscuit**.
 
-## Getting Started
+- Pseudo-3D artisanal-bakery UI (Stitch "Artisanal Baker's Hearth" design)
+- Swipe to slide & merge; 90/10 spawn of fresh 2/4 biscuits
+- Undo (one level), pause/resume, restart
+- Best score + mid-run persistence
+- Synthesized bakery audio: wooden clacks, dough thumps, hearth chimes
+- Music/SFX toggles + volume, vibration toggle
 
-This project is a starting point for a Flutter application.
+Package: `com.gameswajiha.merge2048`
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Rules: see `../stitch-batch5/merge2048/RULES.md` (authoritative).
+Design: see `../stitch-batch5/merge2048/DESIGN.md`.
