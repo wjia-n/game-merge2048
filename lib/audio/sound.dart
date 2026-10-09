@@ -6,6 +6,19 @@ import 'package:audioplayers/audioplayers.dart';
 /// All audio is synthesized programmatically — no downloaded assets.
 /// Identity: wooden biscuit clacks, soft dough thumps, warm hearth chimes,
 /// and a low oven-crackle ambient bed. Matches the artisanal-bakery theme.
+///
+/// Reliability design (every call is safe to repeat and safe to overlap):
+/// - Clips are synthesized ONCE and cached; starting music never blocks the
+///   UI thread after the first build.
+/// - A [_musicGen] generation counter serializes track changes: every
+///   start/stop bumps the generation, in-flight work from an older request
+///   aborts, and the LATEST request always wins. Overlapping calls (menu
+///   in/out, pause/resume, toggles) can never swallow a start or leave the
+///   player half-started — music is app-scoped and never silently dies.
+/// - Lifecycle uses pause()/resume() so an interruption (call,
+///   backgrounding) resumes exactly where it left off instead of restarting
+///   or dying.
+/// - Every public method catches player errors; audio can never crash the app.
 class SoundService {
   static const _sr = 22050;
   final _rnd = Random(2048);
@@ -13,79 +26,142 @@ class SoundService {
   final _sfxPool = <AudioPlayer>[];
   int _poolIdx = 0;
   final _music = AudioPlayer();
-  String _mode = 'none';
 
   bool sfxOn = true;
   bool musicOn = true;
   double sfxVolume = 0.8;
   double musicVolume = 0.6;
 
-  Uint8List? _slide, _spawn, _invalid, _tap, _start, _win, _lose;
-  final _merges = <int, Uint8List>{}; // per-value merge thumps
-  Uint8List? _menuMusic, _gameMusic;
-  bool _buildingMusic = false;
+  // Cache synthesized clips so we only build them once.
+  final Map<String, Uint8List> _cache = {};
+
+  // Music state machine. [_musicGen] is bumped by every start/stop request;
+  // async work checks it still owns the latest generation before touching
+  // the player, so overlapping requests can never desync the music.
+  int _musicGen = 0;
+  bool _musicBusy = false;
+  String? _currentTrack; // 'menu' | 'game' | null
+  bool _pausedByLifecycle = false;
+  bool _disposed = false;
 
   Future<void> init() async {
-    for (var i = 0; i < 4; i++) {
-      _sfxPool.add(AudioPlayer());
-    }
-    await _music.setReleaseMode(ReleaseMode.loop);
-    _slide = _woodenClack(190, 0.9);
-    _spawn = _doughPop();
-    _invalid = _dullThud();
-    _tap = _woodTap();
-    _start = _warmTwoTone();
-    _win = _hearthChime();
-    _lose = _ovenDoorThud();
+    try {
+      for (var i = 0; i < 4; i++) {
+        _sfxPool.add(AudioPlayer());
+      }
+      await _music.setReleaseMode(ReleaseMode.loop);
+    } catch (_) {}
+  }
+
+  /// Pre-build music clips off the critical path. Safe to call any time.
+  Future<void> prewarm() async {
+    if (_disposed) return;
+    await Future(() {});
+    _menuMusicBytes();
+    _gameMusicBytes();
   }
 
   // ---------------- public API ----------------
 
   /// Biscuits sliding on the tray — a wooden clack.
-  void playSlide() => _play(_slide);
+  void playSlide() => _play(_clip('slide', () => _woodenClack(190, 0.9)));
 
   /// Doughy thump when two biscuits merge; pitch rises with the new value.
   void playMerge(int value) {
     final e = value <= 0 ? 1 : (log(value) / ln2).round().clamp(1, 14);
-    _play(_merges.putIfAbsent(e, () => _mergeThump(e)));
+    _play(_clip('merge_$e', () => _mergeThump(e)));
   }
 
-  void playSpawn() => _play(_spawn);
-  void playInvalid() => _play(_invalid);
-  void playTap() => _play(_tap);
-  void playStart() => _play(_start);
-  void playWin() => _play(_win);
-  void playLose() => _play(_lose);
+  void playSpawn() => _play(_clip('spawn', _doughPop));
+  void playInvalid() => _play(_clip('invalid', _dullThud));
+  void playTap() => _play(_clip('tap', _woodTap));
+  void playStart() => _play(_clip('start', _warmTwoTone));
+  void playWin() => _play(_clip('win', _hearthChime));
+  void playLose() => _play(_clip('lose', _ovenDoorThud));
 
-  void _play(Uint8List? bytes) {
-    if (!sfxOn || bytes == null || _sfxPool.isEmpty) return;
-    final p = _sfxPool[_poolIdx++ % _sfxPool.length];
-    p.setVolume(sfxVolume.clamp(0.0, 1.0));
-    p.play(BytesSource(bytes));
+  void _play(Uint8List bytes) {
+    if (!sfxOn || _disposed || _sfxPool.isEmpty) return;
+    try {
+      final p = _sfxPool[_poolIdx++ % _sfxPool.length];
+      p.setVolume(sfxVolume.clamp(0.0, 1.0));
+      p.play(BytesSource(bytes));
+    } catch (_) {}
   }
 
-  /// mode: 'menu' | 'game' | 'none'
+  /// mode: 'menu' | 'game' | 'none'. Generation-serialized: the latest
+  /// request always wins; a start issued while an older one is in flight is
+  /// never dropped. Re-requesting the current track just ensures audibility.
   void setMusicMode(String mode) {
-    if (mode == _mode) return;
-    _mode = mode;
-    if (!musicOn || mode == 'none') {
-      _music.stop();
+    final gen = ++_musicGen;
+    if (mode == 'none' || !musicOn) {
+      _stopMusicNow(gen);
       return;
     }
-    if (mode == 'menu') {
-      _ensureMusic().then((_) {
-        if (_mode == 'menu' && musicOn && _menuMusic != null) {
-          _music.setVolume(musicVolume * 0.7);
-          _music.play(BytesSource(_menuMusic!));
-        }
-      });
-    } else if (mode == 'game') {
-      _ensureMusic().then((_) {
-        if (_mode == 'game' && musicOn && _gameMusic != null) {
-          _music.setVolume(musicVolume * 0.55);
-          _music.play(BytesSource(_gameMusic!));
-        }
-      });
+    _startTrack(gen, mode);
+  }
+
+  Future<void> _startTrack(int gen, String track) async {
+    if (_disposed) return;
+    if (_currentTrack == track && !_pausedByLifecycle) {
+      // Already on this track — make sure it is actually audible.
+      try {
+        await _music.resume();
+      } catch (_) {}
+      return;
+    }
+    while (_musicBusy) {
+      await Future.delayed(const Duration(milliseconds: 30));
+    }
+    if (gen != _musicGen || _disposed || !musicOn) return;
+    _musicBusy = true;
+    try {
+      await _music.stop();
+      if (gen != _musicGen || _disposed || !musicOn) return;
+      _currentTrack = track;
+      _pausedByLifecycle = false;
+      await _music.setVolume(musicVolume * (track == 'menu' ? 0.7 : 0.55));
+      await _music.play(
+          BytesSource(track == 'menu' ? _menuMusicBytes() : _gameMusicBytes()));
+    } catch (_) {
+      if (gen == _musicGen) _currentTrack = null;
+    } finally {
+      _musicBusy = false;
+    }
+  }
+
+  Future<void> _stopMusicNow(int gen) async {
+    while (_musicBusy) {
+      await Future.delayed(const Duration(milliseconds: 30));
+    }
+    if (gen != _musicGen || _disposed) return;
+    try {
+      await _music.stop();
+    } catch (_) {}
+    _currentTrack = null;
+    _pausedByLifecycle = false;
+  }
+
+  /// App went to background / interruption: pause (not stop) so we resume
+  /// exactly where we left off.
+  Future<void> onAppPaused() async {
+    if (_disposed || _currentTrack == null) return;
+    try {
+      await _music.pause();
+      _pausedByLifecycle = true;
+    } catch (_) {}
+  }
+
+  /// App came back: resume only if we paused it and music is still wanted.
+  Future<void> onAppResumed() async {
+    if (_disposed || !musicOn || !_pausedByLifecycle) return;
+    _pausedByLifecycle = false;
+    try {
+      await _music.resume();
+    } catch (_) {
+      // Resume failed (e.g. player was released) — restart the track.
+      final track = _currentTrack;
+      _currentTrack = null;
+      setMusicMode(track ?? 'none');
     }
   }
 
@@ -100,33 +176,39 @@ class SoundService {
     this.musicOn = musicOn;
     this.musicVolume = musicVolume;
     if (!musicOn) {
-      _music.stop();
+      setMusicMode('none');
     } else if (!wasMusic) {
-      final m = _mode;
-      _mode = 'none'; // force restart
-      setMusicMode(m);
+      // toggling music back on: force-restart the current mode's track
+      final track = _currentTrack;
+      _currentTrack = null;
+      setMusicMode(track ?? 'menu');
     } else {
-      _music.setVolume(musicVolume * (_mode == 'menu' ? 0.7 : 0.55));
+      try {
+        _music.setVolume(musicVolume * (_currentTrack == 'menu' ? 0.7 : 0.55));
+      } catch (_) {}
     }
-  }
-
-  Future<void> _ensureMusic() async {
-    if (_menuMusic != null && _gameMusic != null) return;
-    if (_buildingMusic) return;
-    _buildingMusic = true;
-    await Future(() {
-      _menuMusic = _hearthAmbientLoop();
-      _gameMusic = _ovenCrackleLoop();
-    });
-    _buildingMusic = false;
   }
 
   Future<void> dispose() async {
+    _disposed = true;
+    _musicGen++; // cancel any in-flight start
     for (final p in _sfxPool) {
-      await p.dispose();
+      try {
+        await p.dispose();
+      } catch (_) {}
     }
-    await _music.dispose();
+    try {
+      await _music.dispose();
+    } catch (_) {}
   }
+
+  // ---------------- clip cache ----------------
+
+  Uint8List _clip(String key, Uint8List Function() build) =>
+      _cache.putIfAbsent(key, build);
+
+  Uint8List _menuMusicBytes() => _clip('music_menu', _hearthAmbientLoop);
+  Uint8List _gameMusicBytes() => _clip('music_game', _ovenCrackleLoop);
 
   // ---------------- synthesis ----------------
 

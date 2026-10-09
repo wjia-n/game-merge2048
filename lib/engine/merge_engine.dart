@@ -4,8 +4,9 @@ import 'dart:math';
 /// RULES.md §§3–5, 8. No UI, no randomness of its own: callers supply the
 /// board and an injectable [Random] so tests and replays are deterministic.
 ///
-/// The board is a list of 16 [TileRef?] (null = empty cell), row-major.
-/// Tile ids are opaque to the engine; they let the UI animate tile motion.
+/// The board is a list of size*size [TileRef?] (null = empty cell),
+/// row-major. Tile ids are opaque to the engine; they let the UI animate
+/// tile motion.
 class TileRef {
   final int id;
   final int value;
@@ -31,7 +32,7 @@ class TileMove {
 }
 
 class SwipeResult {
-  final List<TileRef?> cells; // new 16-cell board
+  final List<TileRef?> cells; // new board, row-major
   final int gained; // score gained by merges
   final List<TileMove> moves; // motion of surviving tiles
   final bool changed; // legal move iff true
@@ -47,16 +48,19 @@ class MergeEngine {
   /// Resolve a swipe. Classic 2048 resolution (RULES §4):
   /// slide everything to the swipe edge, merge equal pairs from the edge
   /// inward, each tile merges at most once per swipe.
-  static SwipeResult swipe(List<TileRef?> board, SwipeDir dir) {
-    assert(board.length == 16);
-    final cells = List<TileRef?>.filled(16, null);
+  static SwipeResult swipe(List<TileRef?> board, SwipeDir dir,
+      {int size = 4}) {
+    assert(board.length == size * size);
+    assert(size >= 3 && size <= 8);
+    final n = size * size;
+    final cells = List<TileRef?>.filled(n, null);
     final moves = <TileMove>[];
     var gained = 0;
 
-    for (var line = 0; line < 4; line++) {
+    for (var line = 0; line < size; line++) {
       // cell indices ordered from the swipe edge inward
       final idx = <int>[];
-      for (var k = 0; k < 4; k++) {
+      for (var k = 0; k < size; k++) {
         int r, c;
         switch (dir) {
           case SwipeDir.left:
@@ -64,15 +68,15 @@ class MergeEngine {
             c = k;
           case SwipeDir.right:
             r = line;
-            c = 3 - k;
+            c = size - 1 - k;
           case SwipeDir.up:
             r = k;
             c = line;
           case SwipeDir.down:
-            r = 3 - k;
+            r = size - 1 - k;
             c = line;
         }
-        idx.add(r * 4 + c);
+        idx.add(r * size + c);
       }
       final vals = <TileRef>[];
       final src = <int>[]; // source cell index for each tile, edge-inward
@@ -88,6 +92,9 @@ class MergeEngine {
       while (k < vals.length) {
         final to = idx[w];
         if (k + 1 < vals.length && vals[k].value == vals[k + 1].value) {
+          // merge: the survivor keeps the FIRST tile's id and sits at the
+          // edge-most slot; the second tile is absorbed. The new tile may
+          // not merge again this swipe (RULES §4.3).
           final merged = TileRef(vals[k].id, vals[k].value * 2);
           cells[to] = merged;
           gained += merged.value;
@@ -115,7 +122,7 @@ class MergeEngine {
     }
 
     var changed = false;
-    for (var i = 0; i < 16; i++) {
+    for (var i = 0; i < n; i++) {
       final a = board[i];
       final b = cells[i];
       if ((a?.id != b?.id) || (a?.value != b?.value)) {
@@ -133,12 +140,17 @@ class MergeEngine {
   }
 
   /// True when at least one swipe direction is a legal move (RULES §10).
-  static bool movesAvailable(List<TileRef?> board) {
-    for (var i = 0; i < 16; i++) {
+  static bool movesAvailable(List<TileRef?> board, {int size = 4}) {
+    assert(board.length == size * size);
+    for (var i = 0; i < board.length; i++) {
       if (board[i] == null) return true;
-      final r = i ~/ 4, c = i % 4;
-      if (c < 3 && board[i]!.value == board[i + 1]?.value) return true;
-      if (r < 3 && board[i]!.value == board[i + 4]?.value) return true;
+      final r = i ~/ size, c = i % size;
+      if (c < size - 1 && board[i]!.value == board[i + 1]?.value) {
+        return true;
+      }
+      if (r < size - 1 && board[i]!.value == board[i + size]?.value) {
+        return true;
+      }
     }
     return false;
   }
@@ -146,7 +158,7 @@ class MergeEngine {
   /// Index of a uniformly random empty cell, or -1 when the board is full.
   static int spawnIndex(List<TileRef?> board, Random rng) {
     final empty = <int>[];
-    for (var i = 0; i < 16; i++) {
+    for (var i = 0; i < board.length; i++) {
       if (board[i] == null) empty.add(i);
     }
     if (empty.isEmpty) return -1;
@@ -155,4 +167,13 @@ class MergeEngine {
 
   /// Spawn value: 2 with 90% probability, 4 with 10% (RULES §2).
   static int spawnValue(Random rng) => rng.nextDouble() < 0.9 ? 2 : 4;
+
+  /// Highest tile value on the board (0 when empty).
+  static int maxTile(List<TileRef?> board) {
+    var m = 0;
+    for (final t in board) {
+      if (t != null && t.value > m) m = t.value;
+    }
+    return m;
+  }
 }

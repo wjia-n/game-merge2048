@@ -3,53 +3,63 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../state/game.dart';
-import '../theme.dart';
+import '../theme/bakery_themes.dart';
 import 'bakery.dart';
 
-/// The 4x4 baking tray: dark walnut with a raised rim, flour dusting,
+/// The baking tray: theme-colored with a raised rim, flour dusting,
 /// sunken flour wells for empty cells, and animated wooden biscuit tiles.
 ///
 /// Tiles slide with AnimatedPositioned (keyed by stable tile id); merges
-/// pop, spawns scale in, absorbed tiles shrink away.
+/// pop, spawns scale in, absorbed tiles shrink away. Board dimension comes
+/// from the active game mode (4/5/6).
 class WalnutTray extends StatelessWidget {
   final Merge2048Game game;
-  const WalnutTray({super.key, required this.game});
+  final BakeryThemeDef theme;
+  final TileStyleDef tileStyle;
+  final TrayAccentDef accent;
+  const WalnutTray({
+    super.key,
+    required this.game,
+    required this.theme,
+    required this.tileStyle,
+    required this.accent,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final size = game.size;
     return LayoutBuilder(
       builder: (ctx, constraints) {
-        final size = min(constraints.maxWidth, constraints.maxHeight);
+        final traySize = min(constraints.maxWidth, constraints.maxHeight);
         const rim = 10.0;
         const gap = 8.0;
-        final inner = size - rim * 2;
-        final cell = (inner - gap * 5) / 4;
+        final inner = traySize - rim * 2;
+        final cell = (inner - gap * (size + 1)) / size;
         final pad = rim + gap;
 
         Offset pos(int r, int c) =>
             Offset(pad + c * (cell + gap), pad + r * (cell + gap));
 
         return Container(
-          width: size,
-          height: size,
+          width: traySize,
+          height: traySize,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0xFF33241A), Merge2048Theme.tray],
+              colors: [theme.panelHigh, theme.tray],
             ),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-                color: Merge2048Theme.panelHigh, width: 3),
-            boxShadow: const [
-              BoxShadow(
-                  color: Merge2048Theme.woodShadow,
+            border: Border.all(color: accent.rim, width: 3),
+            boxShadow: [
+              const BoxShadow(
+                  color: Color(0x99000000),
                   blurRadius: 18,
                   offset: Offset(0, 9)),
               BoxShadow(
-                  color: Color(0x40FFE2A4),
+                  color: accent.rimLight.withValues(alpha: 0.25),
                   blurRadius: 2,
-                  offset: Offset(0, -2),
+                  offset: const Offset(0, -2),
                   spreadRadius: -1),
             ],
           ),
@@ -63,11 +73,12 @@ class WalnutTray extends StatelessWidget {
                 ),
               ),
               // sunken flour wells
-              for (var i = 0; i < 16; i++)
+              for (var i = 0; i < size * size; i++)
                 Positioned(
-                  left: pos(i ~/ 4, i % 4).dx,
-                  top: pos(i ~/ 4, i % 4).dy,
-                  child: _FlourWell(size: cell),
+                  left: pos(i ~/ size, i % size).dx,
+                  top: pos(i ~/ size, i % size).dy,
+                  child: _FlourWell(
+                      size: cell, theme: theme, accent: accent),
                 ),
               // biscuit tiles
               for (final tile in game.tiles.values)
@@ -77,6 +88,8 @@ class WalnutTray extends StatelessWidget {
                   pos: pos(tile.row, tile.col),
                   size: cell,
                   game: game,
+                  theme: theme,
+                  tileStyle: tileStyle,
                 ),
             ],
           ),
@@ -89,7 +102,10 @@ class WalnutTray extends StatelessWidget {
 /// Sunken flour-dusted well (empty cell): inner shadow + bottom lip rim.
 class _FlourWell extends StatelessWidget {
   final double size;
-  const _FlourWell({required this.size});
+  final BakeryThemeDef theme;
+  final TrayAccentDef accent;
+  const _FlourWell(
+      {required this.size, required this.theme, required this.accent});
 
   @override
   Widget build(BuildContext context) {
@@ -97,19 +113,18 @@ class _FlourWell extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Color(0xCC120802),
-            Color(0x66170804),
+            accent.wellDark.withValues(alpha: 0.8),
+            theme.deepest.withValues(alpha: 0.4),
           ],
         ),
         borderRadius: BorderRadius.circular(size * 0.16),
         border: Border(
           bottom: BorderSide(
-              color: Merge2048Theme.outline.withValues(alpha: 0.25),
-              width: 1.5),
+              color: theme.outline.withValues(alpha: 0.25), width: 1.5),
         ),
       ),
     );
@@ -121,22 +136,28 @@ class _AnimatedBiscuit extends StatelessWidget {
   final Offset pos;
   final double size;
   final Merge2048Game game;
+  final BakeryThemeDef theme;
+  final TileStyleDef tileStyle;
   const _AnimatedBiscuit({
     super.key,
     required this.tile,
     required this.pos,
     required this.size,
     required this.game,
+    required this.theme,
+    required this.tileStyle,
   });
 
   @override
   Widget build(BuildContext context) {
-    final biscuit = BiscuitTile(value: tile.value, size: size);
+    final biscuit =
+        BiscuitTile(value: tile.value, size: size, theme: theme, style: tileStyle);
 
     Widget wrapped = biscuit;
     if (game.mergedIds.contains(tile.id)) {
       // merge pop: 1 -> 1.22 -> 1, replays per swipe via animGen key
-      wrapped = _PopScale(key: ValueKey('pop-${game.animGen}-${tile.id}'), child: biscuit);
+      wrapped = _PopScale(
+          key: ValueKey('pop-${game.animGen}-${tile.id}'), child: biscuit);
     } else if (tile.id == game.spawnedId) {
       wrapped = TweenAnimationBuilder<double>(
         key: ValueKey('spawn-${game.animGen}-${tile.id}'),
@@ -152,8 +173,9 @@ class _AnimatedBiscuit extends StatelessWidget {
         tween: Tween(begin: 1.0, end: 0.0),
         duration: Duration(milliseconds: Merge2048Game.animMs + 40),
         curve: Curves.easeIn,
-        builder: (_, s, child) =>
-            Opacity(opacity: s, child: Transform.scale(scale: 0.6 + 0.4 * s, child: child)),
+        builder: (_, s, child) => Opacity(
+            opacity: s,
+            child: Transform.scale(scale: 0.6 + 0.4 * s, child: child)),
         child: biscuit,
       );
     }

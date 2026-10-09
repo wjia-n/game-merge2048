@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../audio/sound.dart';
 import '../theme.dart';
+import '../theme/bakery_themes.dart';
 import '../widgets/bakery.dart';
 
 /// How-to-play dialog: the RULES in warm bakery voice.
-Future<void> showHowToPlay(BuildContext context, SoundService sound) {
+Future<void> showHowToPlay(
+    BuildContext context, SoundService sound, BakeryThemeDef theme) {
   sound.playTap();
   const rows = [
     ('🥖 The goal',
@@ -27,10 +29,11 @@ Future<void> showHowToPlay(BuildContext context, SoundService sound) {
     context: context,
     builder: (ctx) => DialogBackdrop(
       child: OakDialog(
+        theme: theme,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const WoodSign(title: 'HOW TO PLAY', fontSize: 20),
+            WoodSign(title: 'HOW TO PLAY', fontSize: 20, theme: theme),
             const SizedBox(height: 14),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 380),
@@ -41,12 +44,12 @@ Future<void> showHowToPlay(BuildContext context, SoundService sound) {
                     for (final r in rows) ...[
                       Text(r.$1,
                           style: Merge2048Theme.body(14,
-                              color: Merge2048Theme.primary,
+                              color: theme.primary,
                               weight: FontWeight.w800)),
                       const SizedBox(height: 2),
                       Text(r.$2,
                           style: Merge2048Theme.body(13.5,
-                              color: Merge2048Theme.creamDim)),
+                              color: theme.creamDim)),
                       const SizedBox(height: 10),
                     ],
                   ],
@@ -57,6 +60,7 @@ Future<void> showHowToPlay(BuildContext context, SoundService sound) {
             WoodButton(
               label: 'GOT IT',
               width: double.infinity,
+              theme: theme,
               onTap: () {
                 sound.playTap();
                 Navigator.of(ctx).pop();

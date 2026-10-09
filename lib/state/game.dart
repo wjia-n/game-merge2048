@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../audio/sound.dart';
 import '../engine/merge_engine.dart';
+import '../theme/bakery_themes.dart';
 import 'settings.dart';
 
 /// Visible tile on the board. ids are stable across a run so the UI can
@@ -20,7 +21,7 @@ class BoardTile {
 }
 
 class _UndoSnap {
-  final List<int> values; // 16 values, row-major
+  final List<int> values; // size*size values, row-major
   final int score;
   _UndoSnap(this.values, this.score);
 }
@@ -28,20 +29,33 @@ class _UndoSnap {
 /// Full Merge 2048 session: rules state, animation sequencing, scoring,
 /// undo, victory/game-over flow, save/resume. The board painter and screens
 /// only read; all mutation goes through here.
+///
+/// The engine OWNS the turn state machine: a swipe locks input, a
+/// generation-guarded timer settles the turn (purge, spawn, unlock,
+/// evaluate). A watchdog sweeps any phase left without a live timer, so a
+/// stuck state is impossible by construction.
 class Merge2048Game extends ChangeNotifier {
   final Merge2048Settings settings;
   final SoundService sound;
   final Random _rng;
 
+  String modeId;
+  int get size => GameModes.byId(modeId).size;
+  int get cells => size * size;
+
   Merge2048Game({
     required this.settings,
     required this.sound,
+    String? modeId,
     Random? rng,
-  }) : _rng = rng ?? Random();
+  })  : modeId = modeId ?? settings.modeId,
+        _rng = rng ?? Random() {
+    _startWatchdog();
+  }
 
   // ---- live state ----
   final Map<int, BoardTile> tiles = {};
-  final List<int?> cells = List<int?>.filled(16, null); // cell -> tile id
+  List<int?> board = []; // cell -> tile id, row-major, size*size
   int score = 0;
   int moves = 0;
   bool over = false;
@@ -67,22 +81,66 @@ class Merge2048Game extends ChangeNotifier {
   _UndoSnap? _undo;
   int _gen = 0; // invalidates pending post-animation timers
 
+  // Watchdog: every lock carries a deadline; the watchdog forces a settle
+  // if the animation timer never fired (stuck states impossible).
+  DateTime _lockDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _watchdog;
+  bool _disposed = false;
+
   bool get canUndo =>
       settings.undoOn &&
       _undo != null &&
       !inputLocked &&
       !paused &&
-      !showVictory;
+      !showVictory &&
+      !showGameOver;
 
-  List<int> get values =>
-      [for (var i = 0; i < 16; i++) cells[i] == null ? 0 : tiles[cells[i]]!.value];
+  List<int> get values => [
+        for (var i = 0; i < cells; i++)
+          board[i] == null ? 0 : tiles[board[i]]!.value,
+      ];
+
+  int get maxTileValue {
+    var m = 0;
+    for (final t in tiles.values) {
+      if (t.value > m) m = t.value;
+    }
+    return m;
+  }
+
+  void _startWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_disposed || over) return;
+      if (inputLocked && DateTime.now().isAfter(_lockDeadline)) {
+        // Stale lock: the settle timer was lost somehow. Force-settle the
+        // same generation so the game can always move forward.
+        _settle(_gen);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _gen++; // invalidate any in-flight timers
+    _watchdog?.cancel();
+    super.dispose();
+  }
+
+  /// Switch modes; resets the run cleanly (RULES edge 7).
+  void setMode(String id) {
+    modeId = id;
+    settings.update(() => settings.modeId = id);
+    newGame();
+  }
 
   // ================= setup =================
 
   void newGame() {
     _gen++;
     tiles.clear();
-    cells.fillRange(0, 16, null);
+    board = List<int?>.filled(cells, null);
     score = 0;
     moves = 0;
     over = false;
@@ -106,26 +164,26 @@ class Merge2048Game extends ChangeNotifier {
   }
 
   void _spawnRandom({bool silent = false}) {
-    final board = _boardRefs();
-    final idx = MergeEngine.spawnIndex(board, _rng);
+    final boardRefs = _boardRefs();
+    final idx = MergeEngine.spawnIndex(boardRefs, _rng);
     if (idx < 0) return;
     final id = _nextId++;
     final value = MergeEngine.spawnValue(_rng);
-    tiles[id] = BoardTile(id, value, idx ~/ 4, idx % 4);
-    cells[idx] = id;
+    tiles[id] = BoardTile(id, value, idx ~/ size, idx % size);
+    board[idx] = id;
     if (!silent) spawnedId = id;
   }
 
   List<TileRef?> _boardRefs() => [
-        for (var i = 0; i < 16; i++)
-          cells[i] == null ? null : TileRef(cells[i]!, tiles[cells[i]]!.value),
+        for (var i = 0; i < cells; i++)
+          board[i] == null ? null : TileRef(board[i]!, tiles[board[i]]!.value),
       ];
 
   // ================= moves =================
 
   void swipe(SwipeDir dir) {
     if (over || inputLocked || paused || showVictory || showGameOver) return;
-    final result = MergeEngine.swipe(_boardRefs(), dir);
+    final result = MergeEngine.swipe(_boardRefs(), dir, size: size);
     if (!result.changed) {
       // illegal swipe: no spawn, no score — gentle shake + dull thud (RULES §5)
       invalidShake++;
@@ -139,15 +197,15 @@ class Merge2048Game extends ChangeNotifier {
     _undo = _UndoSnap(values, score);
 
     // apply: move survivors, mark absorbed tiles for fade-out
-    cells.fillRange(0, 16, null);
+    board = List<int?>.filled(cells, null);
     final merged = <int>{};
     final fading = <int>{};
     var topMerge = 0;
     for (final m in result.moves) {
-      cells[m.toIndex] = m.tileId;
+      board[m.toIndex] = m.tileId;
       final t = tiles[m.tileId]!;
-      t.row = m.toIndex ~/ 4;
-      t.col = m.toIndex % 4;
+      t.row = m.toIndex ~/ size;
+      t.col = m.toIndex % size;
       t.value = result.cells[m.toIndex]!.value;
       for (final aid in m.absorbedIds) {
         final a = tiles[aid]!;
@@ -179,30 +237,42 @@ class Merge2048Game extends ChangeNotifier {
     inputLocked = true;
     notifyListeners();
 
-    // after the slide animation: purge absorbed, spawn, unlock, evaluate
+    // after the slide animation: purge absorbed, spawn, unlock, evaluate.
+    // Generation-guarded so a stale timer can never corrupt a newer run.
     final gen = _gen;
+    _lockDeadline =
+        DateTime.now().add(const Duration(milliseconds: animMs + 800));
     Timer(const Duration(milliseconds: animMs + 60), () {
       if (gen != _gen) return; // run was reset mid-animation
-      for (final id in fadingIds) {
-        tiles.remove(id);
-      }
-      fadingIds = {};
-      mergedIds = {};
-      _spawnRandom();
-      sound.playSpawn();
-      inputLocked = false;
-      _evaluateEndOfTurn();
-      _persist();
-      notifyListeners();
+      _settle(gen);
     });
+  }
+
+  /// Settle a completed swipe: purge absorbed tiles, spawn the new biscuit,
+  /// unlock input, and evaluate victory/game-over. Idempotent per generation:
+  /// only the first call with a matching generation settles.
+  void _settle(int gen) {
+    if (gen != _gen || !inputLocked) return;
+    _gen++; // this generation is now consumed; watchdog won't re-settle
+    for (final id in fadingIds) {
+      tiles.remove(id);
+    }
+    fadingIds = {};
+    mergedIds = {};
+    _spawnRandom();
+    sound.playSpawn();
+    inputLocked = false;
+    _evaluateEndOfTurn();
+    _persist();
+    notifyListeners();
   }
 
   void _evaluateEndOfTurn() {
     // victory takes precedence over game over (RULES edge 3)
-    final hit2048 =
-        !victoryShown && tiles.values.any((t) => t.value >= 2048);
-    final noMoves = !MergeEngine.movesAvailable(_boardRefs());
-    if (hit2048) {
+    final hitWin =
+        !victoryShown && maxTileValue >= GameModes.winValue;
+    final noMoves = !MergeEngine.movesAvailable(_boardRefs(), size: size);
+    if (hitWin) {
       victoryShown = true;
       showVictory = true;
       _pendingGameOver = noMoves;
@@ -216,12 +286,13 @@ class Merge2048Game extends ChangeNotifier {
   void _triggerGameOver() {
     over = true;
     showGameOver = true;
+    settings.recordRun(score: score, maxTile: maxTileValue);
     sound.playLose();
     if (settings.vibration) HapticFeedback.heavyImpact();
     settings.clearSavedGame(); // run is finished; nothing to resume
   }
 
-  /// Dismiss the victory dialog and keep baking toward 4096+.
+  /// Dismiss the victory dialog and keep baking toward higher biscuits.
   void keepBaking() {
     showVictory = false;
     sound.playTap();
@@ -241,16 +312,16 @@ class Merge2048Game extends ChangeNotifier {
     final snap = _undo!;
     _undo = null;
     _gen++; // cancel any in-flight animation timer
+    inputLocked = false;
     tiles.clear();
     _nextId = 1;
-    for (var i = 0; i < 16; i++) {
+    board = List<int?>.filled(cells, null);
+    for (var i = 0; i < cells && i < snap.values.length; i++) {
       final v = snap.values[i];
       if (v > 0) {
         final id = _nextId++;
-        tiles[id] = BoardTile(id, v, i ~/ 4, i % 4);
-        cells[i] = id;
-      } else {
-        cells[i] = null;
+        tiles[id] = BoardTile(id, v, i ~/ size, i % size);
+        board[i] = id;
       }
     }
     score = snap.score;
@@ -258,7 +329,6 @@ class Merge2048Game extends ChangeNotifier {
     showGameOver = false;
     victoryShown = false; // RULES edge 4: may fire again on re-merge
     _pendingGameOver = false;
-    inputLocked = false;
     mergedIds = {};
     fadingIds = {};
     spawnedId = null;
@@ -284,6 +354,7 @@ class Merge2048Game extends ChangeNotifier {
   Future<void> _persist() async {
     if (over) return;
     await settings.saveGame({
+      'modeId': modeId,
       'values': values,
       'score': score,
       'moves': moves,
@@ -298,17 +369,19 @@ class Merge2048Game extends ChangeNotifier {
   bool restore(Map<String, dynamic> data) {
     try {
       _gen++;
+      final savedMode = data['modeId'] as String?;
+      if (savedMode != null && savedMode != modeId) {
+        modeId = savedMode;
+      }
       final vals = (data['values'] as List).cast<int>();
-      if (vals.length != 16) return false;
+      board = List<int?>.filled(cells, null);
       tiles.clear();
       _nextId = 1;
-      for (var i = 0; i < 16; i++) {
+      for (var i = 0; i < cells && i < vals.length; i++) {
         if (vals[i] > 0) {
           final id = _nextId++;
-          tiles[id] = BoardTile(id, vals[i], i ~/ 4, i % 4);
-          cells[i] = id;
-        } else {
-          cells[i] = null;
+          tiles[id] = BoardTile(id, vals[i], i ~/ size, i % size);
+          board[i] = id;
         }
       }
       score = (data['score'] as num).toInt();

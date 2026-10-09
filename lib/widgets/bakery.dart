@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../theme/bakery_themes.dart';
 
 /// Physical bakery UI components — pseudo-3D carved wood, wooden biscuits,
 /// flour dust, warm oven light. Pressed = translate down with shrinking
@@ -14,13 +15,15 @@ import '../theme.dart';
 /// faint fabric grain and slow-drifting flour dust in the air.
 class FlourDustBackground extends StatelessWidget {
   final Widget child;
-  const FlourDustBackground({super.key, required this.child});
+  final BakeryThemeDef? theme;
+  const FlourDustBackground({super.key, required this.child, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Stack(
       children: [
-        Container(color: Merge2048Theme.background),
+        Container(color: t.background),
         // warm oven-light vignette from above
         Container(
           decoration: const BoxDecoration(
@@ -155,15 +158,23 @@ class _DustPainter extends CustomPainter {
 
 /// Chunky wooden number biscuit: extruded shelf, beveled face with toast
 /// shading, wood grain, pyrography-burned (or carved-gold) numeral.
+/// [theme] picks the toast palette; [style] picks the bake treatment.
 class BiscuitTile extends StatelessWidget {
   final int value;
   final double size;
-  const BiscuitTile({super.key, required this.value, required this.size});
+  final BakeryThemeDef? theme;
+  final TileStyleDef? style;
+  const BiscuitTile(
+      {super.key, required this.value, required this.size, this.theme, this.style});
 
   @override
   Widget build(BuildContext context) {
-    final face = Merge2048Theme.faceFor(value);
-    final numeralColor = Merge2048Theme.numeralFor(value);
+    final t = theme ?? BakeryThemes.all.first;
+    final st = style ?? TileStyles.all.first;
+    final face = t.faceFor(value);
+    var numeralColor = t.numeralFor(value);
+    if (st.goldNumerals) numeralColor = t.primary;
+    if (st.creamInk) numeralColor = t.cream;
     final digits = '$value'.length;
     final fontSize = size *
         (digits <= 2 ? 0.42 : digits == 3 ? 0.34 : digits == 4 ? 0.27 : 0.21);
@@ -172,6 +183,11 @@ class BiscuitTile extends StatelessWidget {
       top: face[0],
       bottom: face[1],
       numeralColor: numeralColor,
+      cornerFactor: st.cornerFactor,
+      heavyCrust: st.heavyCrust,
+      flourDust: st.flourDust,
+      shelfColor: t.toastDeep,
+      theme: t,
       child: Text(
         '$value',
         style: Merge2048Theme.numeral(fontSize).copyWith(
@@ -199,6 +215,11 @@ class BiscuitFace extends StatelessWidget {
   final Color bottom;
   final Color numeralColor;
   final Widget child;
+  final double cornerFactor;
+  final bool heavyCrust;
+  final bool flourDust;
+  final Color? shelfColor;
+  final BakeryThemeDef? theme;
   const BiscuitFace({
     super.key,
     required this.size,
@@ -206,11 +227,17 @@ class BiscuitFace extends StatelessWidget {
     required this.bottom,
     required this.numeralColor,
     required this.child,
+    this.cornerFactor = 0.16,
+    this.heavyCrust = false,
+    this.flourDust = false,
+    this.shelfColor,
+    this.theme,
   });
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(size * 0.16);
+    final t = theme ?? BakeryThemes.all.first;
+    final radius = BorderRadius.circular(size * cornerFactor);
     return SizedBox(
       width: size,
       height: size,
@@ -224,7 +251,7 @@ class BiscuitFace extends StatelessWidget {
             bottom: 0,
             child: Container(
               decoration: BoxDecoration(
-                color: Merge2048Theme.extrusion,
+                color: shelfColor ?? t.toastDeep,
                 borderRadius: radius,
               ),
             ),
@@ -244,10 +271,13 @@ class BiscuitFace extends StatelessWidget {
                 ),
                 borderRadius: radius,
                 border: Border.all(
-                    color: const Color(0x553A2410), width: 1),
+                    color: heavyCrust
+                        ? t.numeralBurn.withValues(alpha: 0.65)
+                        : const Color(0x553A2410),
+                    width: heavyCrust ? 2.5 : 1),
                 boxShadow: const [
                   BoxShadow(
-                      color: Merge2048Theme.tileShadow,
+                      color: Color(0x99140C08),
                       blurRadius: 10,
                       offset: Offset(0, 6)),
                 ],
@@ -260,14 +290,14 @@ class BiscuitFace extends StatelessWidget {
                       margin: EdgeInsets.all(size * 0.05),
                       decoration: BoxDecoration(
                         borderRadius:
-                            BorderRadius.circular(size * 0.11),
+                            BorderRadius.circular(size * cornerFactor * 0.7),
                         border: Border(
                           top: BorderSide(
-                              color: Merge2048Theme.bevelLight
+                              color: const Color(0xFFFFE2A4)
                                   .withValues(alpha: 0.4),
                               width: 2),
                           left: BorderSide(
-                              color: Merge2048Theme.bevelLight
+                              color: const Color(0xFFFFE2A4)
                                   .withValues(alpha: 0.18),
                               width: 1.5),
                         ),
@@ -281,6 +311,15 @@ class BiscuitFace extends StatelessWidget {
                       child: CustomPaint(painter: _WoodGrainPainter()),
                     ),
                   ),
+                  // flour dusting for flour-style bakes
+                  if (flourDust)
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: radius,
+                        child: CustomPaint(
+                            painter: _TileFlourPainter(size: size)),
+                      ),
+                    ),
                   Center(child: child),
                 ],
               ),
@@ -290,6 +329,28 @@ class BiscuitFace extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Light flour speckle across a biscuit face (flour-dusted styles).
+class _TileFlourPainter extends CustomPainter {
+  final double size;
+  _TileFlourPainter({required this.size});
+
+  @override
+  void paint(Canvas canvas, Size sz) {
+    final rnd = Random(size.round() * 7 + 3);
+    final paint = Paint()..color = const Color(0x4DF8DDCD);
+    for (var i = 0; i < 26; i++) {
+      canvas.drawCircle(
+        Offset(rnd.nextDouble() * sz.width, rnd.nextDouble() * sz.height),
+        0.6 + rnd.nextDouble() * 1.6,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _WoodGrainPainter extends CustomPainter {
@@ -325,6 +386,7 @@ class WoodButton extends StatefulWidget {
   final double fontSize;
   final double? width;
   final IconData? icon;
+  final BakeryThemeDef? theme;
   const WoodButton({
     super.key,
     required this.label,
@@ -333,6 +395,7 @@ class WoodButton extends StatefulWidget {
     this.fontSize = 17,
     this.width,
     this.icon,
+    this.theme,
   });
 
   @override
@@ -344,19 +407,20 @@ class _WoodButtonState extends State<WoodButton> {
 
   @override
   Widget build(BuildContext context) {
+    final t = widget.theme ?? BakeryThemes.all.first;
     final enabled = widget.onTap != null;
     final rim = widget.primary
-        ? Merge2048Theme.honeyBase
-        : Merge2048Theme.deepest;
+        ? t.buttonBase
+        : t.deepest;
     final faceTop = widget.primary
-        ? Merge2048Theme.honeyButton
+        ? t.honey
         : const Color(0xFF54382A);
     final faceBottom = widget.primary
         ? const Color(0xFFE0951F)
-        : Merge2048Theme.timber;
+        : t.panel;
     final labelColor = widget.primary
-        ? Merge2048Theme.pyrography
-        : Merge2048Theme.cream;
+        ? t.numeralBurn
+        : t.cream;
     return GestureDetector(
       onTapDown: (_) => setState(() => _down = true),
       onTapUp: (_) {
@@ -377,7 +441,7 @@ class _WoodButtonState extends State<WoodButton> {
                 ? null
                 : const [
                     BoxShadow(
-                        color: Merge2048Theme.woodShadow,
+                        color: Color(0x99000000),
                         blurRadius: 12,
                         offset: Offset(0, 6)),
                   ],
@@ -394,7 +458,7 @@ class _WoodButtonState extends State<WoodButton> {
               borderRadius: BorderRadius.circular(13),
               border: Border(
                 top: BorderSide(
-                    color: Merge2048Theme.bevelLight
+                    color: const Color(0xFFFFE2A4)
                         .withValues(alpha: widget.primary ? 0.5 : 0.15),
                     width: 1.5),
               ),
@@ -444,12 +508,14 @@ class WoodIconButton extends StatefulWidget {
   final VoidCallback? onTap;
   final double size;
   final String? tooltip;
+  final BakeryThemeDef? theme;
   const WoodIconButton({
     super.key,
     required this.icon,
     this.onTap,
     this.size = 46,
     this.tooltip,
+    this.theme,
   });
 
   @override
@@ -461,6 +527,7 @@ class _WoodIconButtonState extends State<WoodIconButton> {
 
   @override
   Widget build(BuildContext context) {
+    final t = widget.theme ?? BakeryThemes.all.first;
     final enabled = widget.onTap != null;
     return GestureDetector(
       onTapDown: (_) => setState(() => _down = true),
@@ -476,17 +543,17 @@ class _WoodIconButtonState extends State<WoodIconButton> {
           width: widget.size,
           height: widget.size,
           padding: EdgeInsets.only(bottom: _down ? 0 : 3),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Merge2048Theme.honeyBase,
+            color: t.buttonBase,
           ),
           child: Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Color(0xFF6B4A33), Merge2048Theme.timber],
+                colors: [Color(0xFF6B4A33), t.panel],
               ),
               border: Border(
                 top: BorderSide(
@@ -494,7 +561,7 @@ class _WoodIconButtonState extends State<WoodIconButton> {
               ),
             ),
             child: Icon(widget.icon,
-                color: Merge2048Theme.primary, size: widget.size * 0.48),
+                color: t.primary, size: widget.size * 0.48),
           ),
         ),
       ),
@@ -508,28 +575,31 @@ class _WoodIconButtonState extends State<WoodIconButton> {
 class WoodPanel extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
+  final BakeryThemeDef? theme;
   const WoodPanel(
       {super.key,
       required this.child,
-      this.padding = const EdgeInsets.all(16)});
+      this.padding = const EdgeInsets.all(16),
+      this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Container(
       padding: padding,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF3D2D20), Merge2048Theme.panel],
+          colors: [Color(0xFF3D2D20), t.panel],
         ),
         borderRadius: Merge2048Theme.cardRadius,
         border: Border.all(
-            color: Merge2048Theme.outline.withValues(alpha: 0.35),
+            color: t.outline.withValues(alpha: 0.35),
             width: 1.2),
         boxShadow: const [
           BoxShadow(
-              color: Merge2048Theme.woodShadow,
+              color: Color(0x99000000),
               blurRadius: 14,
               offset: Offset(0, 6)),
         ],
@@ -544,14 +614,17 @@ class HangingPlaque extends StatelessWidget {
   final String label;
   final String value;
   final bool star; // baked-star "new best" stamp
+  final BakeryThemeDef? theme;
   const HangingPlaque(
       {super.key,
       required this.label,
       required this.value,
-      this.star = false});
+      this.star = false,
+      this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -567,13 +640,13 @@ class HangingPlaque extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
               decoration: BoxDecoration(
-                color: Merge2048Theme.plaqueFace,
+                color: t.plaqueFace,
                 borderRadius: BorderRadius.circular(9),
                 border: Border.all(
-                    color: Merge2048Theme.panelHigh, width: 2.5),
+                    color: t.panelHigh, width: 2.5),
                 boxShadow: const [
                   BoxShadow(
-                      color: Merge2048Theme.woodShadow,
+                      color: Color(0x99000000),
                       blurRadius: 8,
                       offset: Offset(0, 4)),
                 ],
@@ -584,7 +657,7 @@ class HangingPlaque extends StatelessWidget {
                   Text(label, style: Merge2048Theme.labelCaps(10)),
                   Text(value,
                       style: Merge2048Theme.body(19,
-                              color: Merge2048Theme.honeyButton,
+                              color: t.honey,
                               weight: FontWeight.w800)
                           .copyWith(
                               fontFeatures: const [
@@ -599,18 +672,18 @@ class HangingPlaque extends StatelessWidget {
                 top: -10,
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Merge2048Theme.amber,
+                    color: t.honey,
                     boxShadow: [
                       BoxShadow(
-                          color: Merge2048Theme.woodShadow,
+                          color: Color(0x99000000),
                           blurRadius: 4,
                           offset: Offset(0, 2)),
                     ],
                   ),
-                  child: const Icon(Icons.star_rounded,
-                      color: Merge2048Theme.pyrography, size: 16),
+                  child: Icon(Icons.star_rounded,
+                      color: t.numeralBurn, size: 16),
                 ),
               ),
           ],
@@ -640,25 +713,28 @@ class _TwinePainter extends CustomPainter {
 class WoodSign extends StatelessWidget {
   final String title;
   final double fontSize;
-  const WoodSign({super.key, required this.title, this.fontSize = 22});
+  final BakeryThemeDef? theme;
+  const WoodSign(
+      {super.key, required this.title, this.fontSize = 22, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Container(
       padding:
           const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF4A3826), Merge2048Theme.panel],
+          colors: [Color(0xFF4A3826), t.panel],
         ),
         borderRadius: BorderRadius.circular(10),
         border:
-            Border.all(color: Merge2048Theme.honeyBase, width: 1.5),
+            Border.all(color: t.buttonBase, width: 1.5),
         boxShadow: const [
           BoxShadow(
-              color: Merge2048Theme.woodShadow,
+              color: Color(0x99000000),
               blurRadius: 10,
               offset: Offset(0, 4)),
         ],
@@ -667,7 +743,7 @@ class WoodSign extends StatelessWidget {
         title,
         textAlign: TextAlign.center,
         style: Merge2048Theme.display(fontSize).copyWith(
-          color: Merge2048Theme.primary,
+          color: t.primary,
           shadows: const [
             Shadow(
                 color: Color(0x80000000),
@@ -686,11 +762,13 @@ class WoodSign extends StatelessWidget {
 class DamperToggle extends StatelessWidget {
   final bool value;
   final ValueChanged<bool> onChanged;
+  final BakeryThemeDef? theme;
   const DamperToggle(
-      {super.key, required this.value, required this.onChanged});
+      {super.key, required this.value, required this.onChanged, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return GestureDetector(
       onTap: () => onChanged(!value),
       child: AnimatedContainer(
@@ -701,10 +779,10 @@ class DamperToggle extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(999),
           color: value
-              ? Merge2048Theme.honeyBase
-              : Merge2048Theme.deepest,
+              ? t.buttonBase
+              : t.deepest,
           border: Border.all(
-              color: Merge2048Theme.outline.withValues(alpha: 0.4)),
+              color: t.outline.withValues(alpha: 0.4)),
           boxShadow: const [
             BoxShadow(
                 color: Colors.black45,
@@ -732,9 +810,9 @@ class DamperToggle extends StatelessWidget {
                   offset: Offset(0, 2)),
             ],
           ),
-          child: const Center(
+          child: Center(
             child: Icon(Icons.eco_rounded,
-                size: 14, color: Merge2048Theme.pyrography),
+                size: 14, color: t.numeralBurn),
           ),
         ),
       ),
@@ -746,16 +824,18 @@ class DamperToggle extends StatelessWidget {
 class RollingPinSlider extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
+  final BakeryThemeDef? theme;
   const RollingPinSlider(
-      {super.key, required this.value, required this.onChanged});
+      {super.key, required this.value, required this.onChanged, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return SliderTheme(
       data: SliderTheme.of(context).copyWith(
         trackHeight: 10,
-        activeTrackColor: Merge2048Theme.honey,
-        inactiveTrackColor: Merge2048Theme.deepest,
+        activeTrackColor: t.honey,
+        inactiveTrackColor: t.deepest,
         thumbShape: const _RollingPinThumb(),
         overlayShape: SliderComponentShape.noOverlay,
       ),
@@ -811,25 +891,27 @@ class _RollingPinThumb extends SliderComponentShape {
 class OakDialog extends StatelessWidget {
   final Widget child;
   final double maxWidth;
+  final BakeryThemeDef? theme;
   const OakDialog(
-      {super.key, required this.child, this.maxWidth = 340});
+      {super.key, required this.child, this.maxWidth = 340, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Center(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: Container(
           padding: const EdgeInsets.all(9),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
+            gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [Color(0xFF4D3823), Merge2048Theme.panelHigh],
+              colors: [Color(0xFF4D3823), t.panelHigh],
             ),
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-                color: Merge2048Theme.honeyBase, width: 1.5),
+                color: t.buttonBase, width: 1.5),
             boxShadow: const [
               BoxShadow(
                   color: Color(0xB3000000),
@@ -842,7 +924,7 @@ class OakDialog extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 26, 20, 22),
                 decoration: BoxDecoration(
-                  color: Merge2048Theme.tray,
+                  color: t.tray,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                       color: Colors.black.withValues(alpha: 0.4)),
@@ -892,7 +974,8 @@ class OakDialog extends StatelessWidget {
 /// Dimmed warm backdrop for dialogs (75% dark cocoa).
 class DialogBackdrop extends StatelessWidget {
   final Widget child;
-  const DialogBackdrop({super.key, required this.child});
+  final BakeryThemeDef? theme;
+  const DialogBackdrop({super.key, required this.child, this.theme});
 
   @override
   Widget build(BuildContext context) {
@@ -907,21 +990,24 @@ class DialogBackdrop extends StatelessWidget {
 
 /// "MERGE 2048" as chunky wooden biscuit letters on a wooden shelf.
 class BiscuitTitle extends StatelessWidget {
-  const BiscuitTitle({super.key});
+  final BakeryThemeDef? theme;
+  const BiscuitTitle({super.key, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     final w = MediaQuery.of(context).size.width;
     final letter = (w - 72) / 6.4;
     final ls = letter.clamp(44.0, 62.0);
     const word1 = 'MERGE';
     const word2 = '2048';
+    // biscuit-letter faces follow the theme's toast progression
     final faces = [
-      [const Color(0xFFF1DDA8), const Color(0xFFD9A566)],
-      [const Color(0xFFEBAA63), const Color(0xFFD08C4E)],
-      [const Color(0xFFE08645), const Color(0xFFBC6530)],
-      [const Color(0xFFD16538), const Color(0xFFA34B24)],
-      [const Color(0xFFB4622D), const Color(0xFF77301A)],
+      t.faceFor(2),
+      t.faceFor(16),
+      t.faceFor(64),
+      t.faceFor(256),
+      t.faceFor(2048),
     ];
     Widget row(String word, int faceOffset) => Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -933,11 +1019,13 @@ class BiscuitTitle extends StatelessWidget {
                   size: ls,
                   top: faces[(i + faceOffset) % faces.length][0],
                   bottom: faces[(i + faceOffset) % faces.length][1],
-                  numeralColor: Merge2048Theme.pyrography,
+                  numeralColor: t.numeralBurn,
+                  shelfColor: t.toastDeep,
+                  theme: t,
                   child: Text(
                     word[i],
                     style: Merge2048Theme.display(ls * 0.52).copyWith(
-                      color: Merge2048Theme.pyrography,
+                      color: t.numeralBurn,
                       shadows: const [
                         Shadow(
                             color: Color(0x40FFFFFF),
@@ -964,10 +1052,10 @@ class BiscuitTitle extends StatelessWidget {
             ),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color: Merge2048Theme.honeyBase, width: 1.5),
+                color: t.buttonBase, width: 1.5),
             boxShadow: const [
               BoxShadow(
-                  color: Merge2048Theme.woodShadow,
+                  color: Color(0x99000000),
                   blurRadius: 16,
                   offset: Offset(0, 8)),
             ],
@@ -989,21 +1077,23 @@ class BiscuitTitle extends StatelessWidget {
 /// Small hint strip: carved wooden bar with cream text.
 class HintStrip extends StatelessWidget {
   final String text;
-  const HintStrip({super.key, required this.text});
+  final BakeryThemeDef? theme;
+  const HintStrip({super.key, required this.text, this.theme});
 
   @override
   Widget build(BuildContext context) {
+    final t = theme ?? BakeryThemes.all.first;
     return Container(
       padding:
           const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
       decoration: BoxDecoration(
-        color: Merge2048Theme.timber,
+        color: t.panel,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-            color: Merge2048Theme.outline.withValues(alpha: 0.35)),
+            color: t.outline.withValues(alpha: 0.35)),
         boxShadow: const [
           BoxShadow(
-              color: Merge2048Theme.woodShadow,
+              color: Color(0x99000000),
               blurRadius: 8,
               offset: Offset(0, 4)),
         ],

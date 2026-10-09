@@ -176,6 +176,78 @@ void main() {
     });
   });
 
+  group('board sizes (5x5 / 6x6 modes)', () {
+    List<TileRef?> boardN(List<int> values, int size) {
+      assert(values.length == size * size);
+      return [
+        for (var i = 0; i < values.length; i++)
+          values[i] == 0 ? null : TileRef(i + 1, values[i]),
+      ];
+    }
+
+    test('5x5: row merge resolves across 5 cells', () {
+      final b = boardN([2, 2, 2, 2, 2, ...List.filled(20, 0)], 5);
+      final r = MergeEngine.swipe(b, SwipeDir.left, size: 5);
+      expect(r.changed, true);
+      expect(r.gained, 8);
+      expect(valuesOf(r.cells).sublist(0, 5), [4, 4, 2, 0, 0]);
+    });
+
+    test('5x5: swipe right packs to the right edge', () {
+      final b = boardN([2, 2, 4, 4, 0, ...List.filled(20, 0)], 5);
+      final r = MergeEngine.swipe(b, SwipeDir.right, size: 5);
+      expect(r.gained, 12);
+      expect(valuesOf(r.cells).sublist(0, 5), [0, 0, 0, 4, 8]);
+    });
+
+    test('6x6: vertical merge top-aligned', () {
+      final vals = List<int>.filled(36, 0);
+      vals[0] = 4;
+      vals[6] = 4;
+      vals[12] = 8;
+      final b = boardN(vals, 6);
+      final r = MergeEngine.swipe(b, SwipeDir.up, size: 6);
+      expect(r.changed, true);
+      expect(r.gained, 8);
+      final v = valuesOf(r.cells);
+      expect([v[0], v[6], v[12]], [8, 8, 0]);
+    });
+
+    test('6x6: full checkerboard -> no moves', () {
+      final vals = [
+        for (var i = 0; i < 36; i++) (i + i ~/ 6) % 2 == 0 ? 2 : 4,
+      ];
+      final b = boardN(vals, 6);
+      expect(MergeEngine.movesAvailable(b, size: 6), false);
+      for (final d in SwipeDir.values) {
+        expect(MergeEngine.swipe(b, d, size: 6).changed, false);
+      }
+    });
+
+    test('6x6: one empty cell -> moves available + spawn lands there', () {
+      final vals = [
+        for (var i = 0; i < 35; i++) (i + i ~/ 6) % 2 == 0 ? 2 : 4,
+        0,
+      ];
+      final b = boardN(vals, 6);
+      expect(MergeEngine.movesAvailable(b, size: 6), true);
+      expect(MergeEngine.spawnIndex(b, Random(3)), 35);
+    });
+
+    test('5x5: merge-once rule on longer rows', () {
+      final b = boardN(
+          [4, 4, 8, 8, 16, ...List.filled(20, 0)], 5);
+      final r = MergeEngine.swipe(b, SwipeDir.left, size: 5);
+      expect(r.gained, 8 + 16);
+      expect(valuesOf(r.cells).sublist(0, 5), [8, 16, 16, 0, 0]);
+    });
+
+    test('maxTile reports the largest biscuit', () {
+      final b = boardN([2, 2048, 0, 0, ...List.filled(21, 0)], 5);
+      expect(MergeEngine.maxTile(b), 2048);
+    });
+  });
+
   group('determinism (RULES §13.20)', () {
     test('fixed seed, scripted swipes -> identical results', () {
       List<int> run(int seed) {
