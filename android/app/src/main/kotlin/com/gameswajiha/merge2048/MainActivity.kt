@@ -1,4 +1,4 @@
-package com.gameswajiha.tictactoe
+package com.gameswajiha.merge2048
 
 import io.flutter.embedding.android.FlutterActivity
 
