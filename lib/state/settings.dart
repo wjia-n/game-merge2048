@@ -138,10 +138,12 @@ class Merge2048Settings extends ChangeNotifier {
   }
 
   /// Rename the player profile. Empty/whitespace falls back to "Baker".
-  void renamePlayer(String name) {
+  /// Persisted as ONE string key (`m2048_playerName`) — never a StringList,
+  /// which Android backs with an unordered StringSet (see MASTER_RULES.md).
+  Future<void> renamePlayer(String name) async {
     final clean = name.trim();
     playerName = clean.isEmpty ? 'Baker' : clean;
-    _save();
+    await _save();
     notifyListeners();
   }
 
