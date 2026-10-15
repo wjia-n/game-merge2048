@@ -190,81 +190,27 @@ class ProScreen extends StatelessWidget {
   }
 
   Widget _buySection(BakeryThemeDef theme) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: store.proPurchased,
-      builder: (_, owned, _) {
-        if (owned) {
-          return Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.panel,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: theme.honey, width: 2),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.workspace_premium_rounded,
-                    color: theme.honey, size: 30),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text('You own Merge 2048 PRO —\neverything is unlocked. 🍪',
-                      style: Merge2048Theme.body(15,
-                          color: theme.cream,
-                          weight: FontWeight.w700)),
-                ),
-              ],
-            ),
-          );
-        }
-        final ready = store.storeReady && store.proProduct != null;
-        return Column(
-          children: [
-            ValueListenableBuilder<bool>(
-              valueListenable: store.purchaseInProgress,
-              builder: (_, busy, _) => WoodButton(
-                label: busy
-                    ? 'WORKING…'
-                    : ready
-                        ? 'UNLOCK PRO — ${store.proProduct!.price}'
-                        : 'UNLOCK PRO',
-                icon: Icons.workspace_premium_rounded,
-                width: double.infinity,
-                theme: theme,
-                onTap: (!ready || busy)
-                    ? null
-                    : () {
-                        sound.playTap();
-                        store.buyPro();
-                      },
-              ),
-            ),
-            if (!ready) ...[
-              const SizedBox(height: 8),
-              Text(
-                  store.error ?? 'Pro unlock available after store setup',
-                  textAlign: TextAlign.center,
-                  style:
-                      Merge2048Theme.label(12, color: theme.creamDim)),
-            ],
-            ValueListenableBuilder<String?>(
-              valueListenable: store.purchaseError,
-              builder: (_, err, _) => err == null
-                  ? const SizedBox.shrink()
-                  : Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(err,
-                          textAlign: TextAlign.center,
-                          style: Merge2048Theme.label(12,
-                              color: const Color(0xFFE08080))),
-                    ),
-            ),
-            const SizedBox(height: 6),
-            Text('One-time purchase · yours forever · no ads, no subscriptions',
-                textAlign: TextAlign.center,
-                style: Merge2048Theme.label(11, color: theme.creamDim)),
-          ],
-        );
-      },
+    // Pro was removed: everything is unlocked, tips only.
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.panel,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.honey, width: 2),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.workspace_premium_rounded,
+              color: theme.honey, size: 30),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text('You own Merge 2048 PRO —\neverything is unlocked. 🍪',
+                style: Merge2048Theme.body(15,
+                    color: theme.cream,
+                    weight: FontWeight.w700)),
+          ),
+        ],
+      ),
     );
   }
 
