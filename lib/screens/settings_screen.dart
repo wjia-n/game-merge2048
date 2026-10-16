@@ -7,6 +7,7 @@ import '../theme.dart';
 import '../theme/bakery_themes.dart';
 import '../widgets/bakery.dart';
 import 'how_to_play.dart';
+import '../transfer/transfer_ui.dart';
 
 /// Bakery settings: hanging sign, carved panels for music/SFX with
 /// damper-latch toggles and rolling-pin sliders, vibration, undo,
@@ -54,6 +55,7 @@ class SettingsScreen extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
                 children: [
+              TransferSaveTile(gameSlug: 'merge2048'),
                   Row(
                     children: [
                       WoodIconButton(
